@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Stark HUD - Subatomic Intensity</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Orbitron', sans-serif; color: #08f7da; }
+        
+        video {
+            position: fixed; width: 100vw; height: 100vh;
+            object-fit: cover; transform: scaleX(-1);
+            filter: brightness(0.25) contrast(1.4) saturate(0.2) hue-rotate(130deg); 
+            z-index: 1;
+        }
+
+        canvas { position: fixed; top: 0; left: 0; z-index: 2; pointer-events: none; }
+
+        /* HUD SIDE CUTS */
+        .hud-side {
+            position: fixed; top: 10%; height: 80%; width: 220px;
+            z-index: 3; background: rgba(8, 247, 218, 0.05);
+            border: 1px solid rgba(8, 247, 218, 0.3);
+            padding: 15px; box-sizing: border-box;
+            backdrop-filter: blur(5px);
+            clip-path: polygon(0% 0%, 100% 5%, 100% 95%, 0% 100%);
+        }
+        #hud-left { left: 20px; border-left: 4px solid #08f7da; }
+        #hud-right { right: 20px; border-right: 4px solid #08f7da; clip-path: polygon(0% 5%, 100% 0%, 100% 100%, 0% 95%); }
+
+        .hud-title { font-size: 10px; opacity: 0.6; letter-spacing: 2px; margin-bottom: 5px; text-transform: uppercase; }
+        .hud-value { font-family: monospace; font-size: 12px; margin-bottom: 15px; color: #fff; }
+
+        .scan-line {
+            width: 100%; height: 2px; background: #08f7da;
+            margin: 10px 0; position: relative; overflow: hidden;
+        }
+        .scan-line::after {
+            content: ''; position: absolute; top: 0; left: -100%;
+            width: 100%; height: 100%; background: white;
+            animation: scan 2s infinite linear;
+        }
+        @keyframes scan { 100% { left: 100%; } }
+
+        #periodic-bar {
+            position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 15px; z-index: 4;
+        }
+        .element-card {
+            width: 60px; height: 80px; border: 1px solid rgba(8, 247, 218, 0.2);
+            background: rgba(0, 0, 0, 0.6); text-align: center;
+            display: flex; flex-direction: column; justify-content: center;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .element-card.active {
+            background: rgba(8, 247, 218, 0.3); border-color: #fff;
+            transform: translateY(-10px) scale(1.1); box-shadow: 0 0 20px #08f7da;
+        }
+        .element-card strong { font-size: 18px; }
+        .element-card span { font-size: 8px; opacity: 0.7; }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<video id="cam" autoplay muted></video>
+
+<div id="hud-left" class="hud-side">
+    <div class="hud-title">System Status</div>
+    <div class="hud-value" style="color:#08f7da">LIVE_CORE_LINK</div>
+    <div class="hud-title">Coordinates</div>
+    <div id="val-pos" class="hud-value">X: 0.00 Y: 0.00</div>
+    <div class="scan-line"></div>
+    <div class="hud-title">Scale Factor</div>
+    <div id="val-scale" class="hud-value">1.00x</div>
+</div>
+
+<div id="hud-right" class="hud-side">
+    <div class="hud-title">Element Discovery</div>
+    <div id="val-name" class="hud-value" style="font-size: 18px; color: #08f7da;">SCANNING</div>
+    <div class="hud-title">Subatomic Count</div>
+    <div id="val-particles" class="hud-value">P: -- | N: --</div>
+    <div class="scan-line"></div>
+    <div class="hud-title">Nucleus State</div>
+    <div id="val-reveal" class="hud-value">DORMANT</div>
+</div>
+
+<div id="periodic-bar">
+    <div class="element-card" id="card-0"><span>1</span><strong>H</strong><span>Hydro</span></div>
+    <div class="element-card" id="card-1"><span>2</span><strong>He</strong><span>Helium</span></div>
+    <div class="element-card" id="card-2"><span>3</span><strong>Li</strong><span>Lithium</span></div>
+    <div class="element-card" id="card-3"><span>6</span><strong>C</strong><span>Carbon</span></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+
+<script>
+const ELEMENTS = [
+    { name: "Hydrogen", protons: 1, neutrons: 0, electrons: [1] },
+    { name: "Helium", protons: 2, neutrons: 2, electrons: [2] },
+    { name: "Lithium", protons: 3, neutrons: 4, electrons: [2, 1] },
+    { name: "Carbon", protons: 6, neutrons: 6, electrons: [2, 4] }
+];
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 1000);
+camera.position.z = 8;
+const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const atomGroup = new THREE.Group(); 
+const internalAtom = new THREE.Group(); 
+const containmentSphere = new THREE.Group();
+scene.add(atomGroup);
+atomGroup.add(internalAtom, containmentSphere);
+
+// Background Grid Lighting
+scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+const light = new THREE.PointLight(0x08f7da, 10, 50);
+light.position.set(5, 5, 5);
+scene.add(light);
+
+// Outer Container
+const sphereGeo = new THREE.IcosahedronGeometry(2, 2);
+const shellWire = new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({ color: 0x08f7da, wireframe: true, transparent: true, opacity: 0.3 }));
+const shellPoints = new THREE.Points(sphereGeo, new THREE.PointsMaterial({ color: 0x08f7da, size: 0.1, transparent: true, opacity: 0.8 }));
+containmentSphere.add(shellWire, shellPoints);
+
+function rebuildAtom(idx) {
+    while(internalAtom.children.length > 0) { internalAtom.remove(internalAtom.children[0]); }
+    const data = ELEMENTS[idx];
+    document.getElementById('val-name').innerText = data.name.toUpperCase();
+    document.getElementById('val-particles').innerText = `P: ${data.protons} | N: ${data.neutrons}`;
+
+    const nuc = new THREE.Group();
+    const pGeo = new THREE.SphereGeometry(0.22, 16, 16); // Slightly larger
+    
+    for(let i=0; i < (data.protons + data.neutrons); i++) {
+        // High Intensity Emissive Material
+        const mat = new THREE.MeshStandardMaterial({ 
+            color: i < data.protons ? 0x08f7da : 0x004444, 
+            emissive: i < data.protons ? 0x08f7da : 0x002222,
+            emissiveIntensity: 4, 
+            transparent: true, 
+            opacity: 0 
+        });
+        const m = new THREE.Mesh(pGeo, mat);
+        m.position.set((Math.random()-0.5)*0.6, (Math.random()-0.5)*0.6, (Math.random()-0.5)*0.6);
+        nuc.add(m);
+    }
+    internalAtom.add(nuc);
+
+    data.electrons.forEach((count, sIdx) => {
+        const r = 1.3 + (sIdx * 0.9);
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.015, 16, 100), new THREE.MeshBasicMaterial({ color: 0x08f7da, transparent: true, opacity: 0 }));
+        ring.rotation.x = Math.PI/2;
+        internalAtom.add(ring);
+        for(let i=0; i<count; i++){
+            const eg = new THREE.Group();
+            const e = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 }));
+            e.position.x = r; eg.rotation.y = (i/count)*Math.PI*2;
+            eg.userData = { speed: 0.05/(sIdx+1) };
+            internalAtom.add(eg); eg.add(e);
+        }
+    });
+}
+
+let target = { x: 0, y: 0, s: 1, rx: 0, ry: 0, rz: 0 };
+let currentIdx = -1;
+
+navigator.mediaDevices.getUserMedia({ video: true }).then(s => cam.srcObject = s);
+const ws = new WebSocket("ws://localhost:8765");
+
+ws.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    target.x = (d.x - 0.5) * 14;
+    target.y = -(d.y - 0.5) * 10;
+    target.s = d.pinch * 35;
+    target.rx = d.rx; target.ry = d.ry; target.rz = d.rz;
+
+    document.getElementById('val-pos').innerText = `X: ${d.x.toFixed(2)} Y: ${d.y.toFixed(2)}`;
+    document.getElementById('val-scale').innerText = `${(target.s).toFixed(2)}x`;
+
+    let hIdx = Math.floor(d.x * 4);
+    if(hIdx !== currentIdx && hIdx >= 0 && hIdx < 4) {
+        currentIdx = hIdx;
+        rebuildAtom(currentIdx);
+        document.querySelectorAll('.element-card').forEach((c, i) => c.className = (i === currentIdx) ? 'element-card active' : 'element-card');
+    }
+};
+
+function animate() {
+    requestAnimationFrame(animate);
+    const lerp = 0.2;
+
+    atomGroup.position.x += (target.x - atomGroup.position.x) * lerp;
+    atomGroup.position.y += (target.y - atomGroup.position.y) * lerp;
+    let s = atomGroup.scale.x + (target.s - atomGroup.scale.x) * lerp;
+    atomGroup.scale.set(s, s, s);
+
+    atomGroup.rotation.x += (target.rx - atomGroup.rotation.x) * lerp;
+    atomGroup.rotation.y += (target.ry - atomGroup.rotation.y) * lerp;
+    atomGroup.rotation.z += (target.rz - atomGroup.rotation.z) * lerp;
+
+    // --- REFINED OPACITY LOGIC ---
+    // Revealed earlier and stay solid
+    const zoom = Math.max(0, Math.min(1, (s - 4) / 8)); 
+    
+    // Containment shell fades away
+    containmentSphere.children.forEach(c => c.material.opacity = (c.type === 'Points' ? 0.8 : 0.3) * (1 - zoom));
+    
+    // Internal Atom fades to 100% opacity faster (zoom * 1.5)
+    internalAtom.traverse(c => { 
+        if(c.material) {
+            c.material.opacity = Math.min(1.0, zoom * 1.5); 
+        }
+    });
+    
+    document.getElementById('val-reveal').innerText = zoom > 0.1 ? (zoom > 0.9 ? "FULLY STABLE" : "REVEALING...") : "CONTAINED";
+
+    internalAtom.children.forEach(c => { if(c.userData.speed) c.rotation.y += c.userData.speed; });
+    containmentSphere.rotation.y += 0.005;
+
+    renderer.render(scene, camera);
+}
+
+rebuildAtom(0);
+animate();
+
+window.onresize = () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+};
+</script>
+</body>
+</html>

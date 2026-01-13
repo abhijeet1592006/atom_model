@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Stark HUD - Arc Reactor Core</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Orbitron', sans-serif; color: #08f7da; }
+        
+        video {
+            position: fixed; width: 100vw; height: 100vh;
+            object-fit: cover; transform: scaleX(-1);
+            filter: brightness(0.2) contrast(1.4) saturate(0.2) hue-rotate(130deg); 
+            z-index: 1;
+        }
+
+        canvas { position: fixed; top: 0; left: 0; z-index: 2; pointer-events: none; }
+
+        /* HUD SIDE CUTS */
+        .hud-side {
+            position: fixed; top: 10%; height: 80%; width: 220px;
+            z-index: 3; background: rgba(8, 247, 218, 0.05);
+            border: 1px solid rgba(8, 247, 218, 0.3);
+            padding: 15px; box-sizing: border-box;
+            backdrop-filter: blur(5px);
+            clip-path: polygon(0% 0%, 100% 5%, 100% 95%, 0% 100%);
+        }
+        #hud-left { left: 20px; border-left: 4px solid #08f7da; }
+        #hud-right { right: 20px; border-right: 4px solid #08f7da; clip-path: polygon(0% 5%, 100% 0%, 100% 100%, 0% 95%); }
+
+        .hud-title { font-size: 10px; opacity: 0.6; letter-spacing: 2px; margin-bottom: 5px; text-transform: uppercase; }
+        .hud-value { font-family: monospace; font-size: 12px; margin-bottom: 15px; color: #fff; }
+
+        .scan-line {
+            width: 100%; height: 2px; background: #08f7da;
+            margin: 10px 0; position: relative; overflow: hidden;
+        }
+        .scan-line::after {
+            content: ''; position: absolute; top: 0; left: -100%;
+            width: 100%; height: 100%; background: white;
+            animation: scan 2s infinite linear;
+        }
+        @keyframes scan { 100% { left: 100%; } }
+
+        #periodic-bar {
+            position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 15px; z-index: 4;
+        }
+        .element-card {
+            width: 80px; height: 60px; border: 1px solid rgba(8, 247, 218, 0.2);
+            background: rgba(0, 0, 0, 0.6); text-align: center;
+            display: flex; flex-direction: column; justify-content: center;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+        }
+        .element-card.active {
+            background: rgba(8, 247, 218, 0.3); border-color: #fff;
+            transform: translateY(-10px) scale(1.1); box-shadow: 0 0 20px #08f7da;
+        }
+        .element-card strong { font-size: 14px; color: #08f7da; }
+        .element-card span { font-size: 8px; opacity: 0.7; color: #fff; }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<video id="cam" autoplay muted></video>
+
+<div id="hud-left" class="hud-side">
+    <div class="hud-title">Power Status</div>
+    <div class="hud-value" style="color:#08f7da">STARK_CORE_STABLE</div>
+    <div class="hud-title">Hand Matrix</div>
+    <div id="val-pos" class="hud-value">X: 0.00 Y: 0.00</div>
+    <div class="scan-line"></div>
+    <div class="hud-title">Core Output</div>
+    <div id="val-scale" class="hud-value">1.00 GW</div>
+</div>
+
+<div id="hud-right" class="hud-side">
+    <div class="hud-title">Diagnostics</div>
+    <div id="val-name" class="hud-value" style="font-size: 16px; color: #08f7da;">INIT_CORE</div>
+    <div class="hud-title">Plasma Integrity</div>
+    <div id="val-particles" class="hud-value">98.4% SECURE</div>
+    <div class="scan-line"></div>
+    <div class="hud-title">Structural Lock</div>
+    <div id="val-reveal" class="hud-value">STANDBY</div>
+</div>
+
+<div id="periodic-bar">
+    <div class="element-card" id="card-0"><span>MK I</span><strong>PALLADIUM</strong></div>
+    <div class="element-card" id="card-1"><span>MK II</span><strong>VIBRANIUM</strong></div>
+    <div class="element-card" id="card-2"><span>MK III</span><strong>BADASSIUM</strong></div>
+    <div class="element-card" id="card-3"><span>MK IV</span><strong>NANOTECH</strong></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+
+<script>
+const CORES = [
+    { name: "Palladium MK I", color: 0x08f7da, intensity: 2, coils: 10 },
+    { name: "Vibranium Alloy", color: 0x00aaff, intensity: 5, coils: 12 },
+    { name: "Synthetic Element", color: 0xffffff, intensity: 8, coils: 16 },
+    { name: "Nanoparticle Hub", color: 0xff0044, intensity: 4, coils: 8 }
+];
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 1000);
+camera.position.z = 8;
+const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const arcGroup = new THREE.Group(); 
+scene.add(arcGroup);
+
+// Lighting
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const coreLight = new THREE.PointLight(0x08f7da, 20, 10);
+arcGroup.add(coreLight);
+
+function createArcReactor(idx) {
+    // Clear old geometry
+    while(arcGroup.children.length > 0) { arcGroup.remove(arcGroup.children[0]); }
+    
+    const data = CORES[idx];
+    document.getElementById('val-name').innerText = data.name.toUpperCase();
+    coreLight.color.setHex(data.color);
+
+    // 1. OUTER RING (The Metal Frame)
+    const frameGeo = new THREE.TorusGeometry(2, 0.05, 16, 100);
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 1, roughness: 0.2 });
+    const frame = new THREE.Mesh(frameGeo, frameMat);
+    arcGroup.add(frame);
+
+    // 2. INNER GLOW RING
+    const glowGeo = new THREE.TorusGeometry(1.5, 0.02, 16, 100);
+    const glowMat = new THREE.MeshBasicMaterial({ color: data.color, transparent: true, opacity: 0.8 });
+    const glowRing = new THREE.Mesh(glowGeo, glowMat);
+    arcGroup.add(glowRing);
+
+    // 3. ENERGY COILS (Transformers)
+    const coilGroup = new THREE.Group();
+    const coilGeo = new THREE.BoxGeometry(0.3, 0.4, 0.5);
+    const coilMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 1 });
+    const wireMat = new THREE.MeshBasicMaterial({ color: data.color });
+
+    for(let i=0; i < data.coils; i++) {
+        const pivot = new THREE.Group();
+        const coil = new THREE.Mesh(coilGeo, coilMat);
+        coil.position.y = 1.75;
+        
+        // Add copper "wire" wraps
+        const wire = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.1, 0.55), wireMat);
+        wire.position.y = 1.75;
+        
+        pivot.rotation.z = (i / data.coils) * Math.PI * 2;
+        pivot.add(coil, wire);
+        coilGroup.add(pivot);
+    }
+    arcGroup.add(coilGroup);
+
+    // 4. CENTRAL CORE (The Blue Hub)
+    const centerGeo = new THREE.CylinderGeometry(0.8, 0.8, 0.2, 32);
+    const centerMat = new THREE.MeshStandardMaterial({ 
+        color: 0x111111, 
+        emissive: data.color, 
+        emissiveIntensity: 2 
+    });
+    const center = new THREE.Mesh(centerGeo, centerMat);
+    center.rotation.x = Math.PI/2;
+    arcGroup.add(center);
+
+    // 5. INTERNAL STAIRS/GRID
+    const grid = new THREE.Mesh(
+        new THREE.CircleGeometry(0.7, 32),
+        new THREE.MeshBasicMaterial({ color: data.color, wireframe: true, transparent: true, opacity: 0.5 })
+    );
+    grid.position.z = 0.15;
+    arcGroup.add(grid);
+    
+    arcGroup.userData = { coilGroup, grid, rotationSpeed: 0.01 };
+}
+
+let target = { x: 0, y: 0, s: 1, rx: 0, ry: 0, rz: 0 };
+let currentIdx = -1;
+
+// Camera feed
+navigator.mediaDevices.getUserMedia({ video: true }).then(s => {
+    document.getElementById('cam').srcObject = s;
+});
+
+// Communication with backend (Same logic as yours)
+const ws = new WebSocket("ws://localhost:8765");
+ws.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    target.x = (d.x - 0.5) * 14;
+    target.y = -(d.y - 0.5) * 10;
+    target.s = d.pinch * 35; // This controls the reactor size
+    target.rx = d.rx; target.ry = d.ry; target.rz = d.rz;
+
+    document.getElementById('val-pos').innerText = `X: ${d.x.toFixed(2)} Y: ${d.y.toFixed(2)}`;
+    document.getElementById('val-scale').innerText = `${(target.s).toFixed(2)} GW`;
+
+    let hIdx = Math.floor(d.x * 4);
+    if(hIdx !== currentIdx && hIdx >= 0 && hIdx < 4) {
+        currentIdx = hIdx;
+        createArcReactor(currentIdx);
+        document.querySelectorAll('.element-card').forEach((c, i) => c.className = (i === currentIdx) ? 'element-card active' : 'element-card');
+    }
+};
+
+function animate() {
+    requestAnimationFrame(animate);
+    const lerp = 0.15;
+
+    // Movement Physics
+    arcGroup.position.x += (target.x - arcGroup.position.x) * lerp;
+    arcGroup.position.y += (target.y - arcGroup.position.y) * lerp;
+    
+    let s = arcGroup.scale.x + (target.s - arcGroup.scale.x) * lerp;
+    arcGroup.scale.set(s, s, s);
+
+    // Rotation from input
+    arcGroup.rotation.x += (target.rx - arcGroup.rotation.x) * lerp;
+    arcGroup.rotation.y += (target.ry - arcGroup.rotation.y) * lerp;
+    arcGroup.rotation.z += (target.rz - arcGroup.rotation.z) * lerp;
+
+    // Constant Reactor Idle Animation
+    if(arcGroup.userData.coilGroup) {
+        arcGroup.userData.coilGroup.rotation.z += 0.01;
+        arcGroup.userData.grid.rotation.z -= 0.02;
+    }
+
+    // Interaction Visuals
+    const zoom = Math.max(0, Math.min(1, (s - 2) / 10)); 
+    document.getElementById('val-reveal').innerText = zoom > 0.1 ? (zoom > 0.8 ? "CRITICAL GAIN" : "LINKED") : "STANDBY";
+
+    renderer.render(scene, camera);
+}
+
+// Start-up
+createArcReactor(0);
+animate();
+
+window.onresize = () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+};
+</script>
+</body>
+</html>
